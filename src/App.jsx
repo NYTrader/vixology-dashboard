@@ -1,10 +1,7 @@
 import { useState, useEffect } from "react";
 
-const WORKER = "https://solitary-breeze-63fa.vadim-iosilevich.workers.dev";
 const FINNHUB_KEY = "d6jl1apr01qkvh5qbt6gd6jl1apr01qkvh5qbt70";
 const FINNHUB = "https://finnhub.io/api/v1";
-
-const WORKER_TICKERS = new Set(["^VIX","^VXN","^VVIX","^MOVE","^TNX","^TYX"]);
 
 const DEC31 = {
   SPY: 681.92, DIA: 445.29, QQQ: 614.31, ONEQ: 230.79, IWM: 218.19,
@@ -64,9 +61,14 @@ const SECTIONS = [
   ]},
 ];
 
-const ALL_TICKERS = [...new Set(SECTIONS.flatMap(s => s.items.map(i => i.ticker)))];
-const ETF_TICKERS = ALL_TICKERS.filter(t => !WORKER_TICKERS.has(t));
-const IDX_TICKERS = ALL_TICKERS.filter(t => WORKER_TICKERS.has(t));
+// Only ETF tickers — skip indices for now
+const ETF_TICKERS = [
+  "SPY","DIA","QQQ","ONEQ","IWM",
+  "VGK","ILF","EWJ","FXI","INDA","EEM",
+  "AGG","TLT","IEF","LQD","HYG",
+  "IBIT","ETHA",
+  "SVIX","SVXY","VIXY","VXX","UVXY","UVIX","SVOL","VYLD",
+];
 
 function getET() {
   return new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
@@ -84,7 +86,7 @@ function lastTradingDayLabel() {
   return d.toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "numeric" });
 }
 
-async function fetchETFs() {
+async function fetchAllPrices() {
   const results = {};
   const BATCH = 10;
   for (let i = 0; i < ETF_TICKERS.length; i += BATCH) {
@@ -96,34 +98,13 @@ async function fetchETFs() {
         const d = await res.json();
         const price = todayCloseAvailable() ? (d.c || d.pc) : d.pc;
         if (price && price !== 0) results[ticker] = price;
-      } catch (e) { console.warn(`ETF ${ticker}:`, e.message); }
+      } catch (e) {
+        console.warn(`${ticker}:`, e.message);
+      }
     }));
     if (i + BATCH < ETF_TICKERS.length) await new Promise(r => setTimeout(r, 600));
   }
   return results;
-}
-
-async function fetchIndices() {
-  const results = {};
-  await Promise.all(IDX_TICKERS.map(async ticker => {
-    try {
-      const res = await fetch(`${WORKER}/?ticker=${encodeURIComponent(ticker)}`);
-      if (!res.ok) { console.warn(`Worker non-OK for ${ticker}: ${res.status}`); return; }
-      // Safely parse — worker may return non-JSON in edge cases
-      const text = await res.text();
-      let d;
-      try { d = JSON.parse(text); } catch(e) { console.warn(`Bad JSON for ${ticker}:`, text.slice(0,100)); return; }
-      if (d?.price != null) {
-        results[ticker] = d.price;
-      }
-    } catch (e) { console.warn(`Index ${ticker}:`, e.message); }
-  }));
-  return results;
-}
-
-async function fetchAllPrices() {
-  const [etfs, indices] = await Promise.all([fetchETFs(), fetchIndices()]);
-  return { ...etfs, ...indices };
 }
 
 function fmtPrice(v, type) {
@@ -159,7 +140,7 @@ export default function App() {
     setStatus("loading");
     try {
       const data = await fetchAllPrices();
-      if (Object.keys(data).length < 5) throw new Error("Too few results");
+      if (Object.keys(data).length < 3) throw new Error("Too few results");
       setPrices(data);
       setCloseDate(lastTradingDayLabel());
       setFetchedAt(new Date());
@@ -205,7 +186,7 @@ export default function App() {
               <span style={{ display:"inline-block", width:7, height:7, borderRadius:"50%", marginRight:5, verticalAlign:"middle", background:dotColor, boxShadow:isLive?"0 0 5px #27ae60":"none" }} className={isLive?"pulse":""}></span>
               {isLive    && `${todayCloseAvailable() ? "Today's" : "Prev day's"} close · ${fetchedAt?.toLocaleTimeString()}`}
               {isError   && "Fetch failed — try refreshing"}
-              {isLoading && "Fetching prices… (may take ~15 sec)"}
+              {isLoading && "Fetching prices…"}
             </span>
             <button
               onClick={doFetch}
