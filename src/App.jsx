@@ -1,17 +1,11 @@
 import { useState, useEffect } from "react";
 
+const WORKER = "https://solitary-breeze-63fa.vadim-iosilevich.workers.dev";
 const FINNHUB_KEY = "d6jl1apr01qkvh5qbt6gd6jl1apr01qkvh5qbt70";
-const BASE = "https://finnhub.io/api/v1";
+const FINNHUB = "https://finnhub.io/api/v1";
 
-// These indices are not available on Finnhub free tier — fetch from stooq instead
-const STOOQ_MAP = {
-  "^VIX":  "%5EVIX",
-  "^VXN":  "%5EVXN",
-  "^VVIX": "%5EVVIX",
-  "^MOVE": "%5EMOVE",
-  "^TNX":  "%5ETNX",
-  "^TYX":  "%5ETYX",
-};
+// Tickers to fetch via Cloudflare worker (CBOE + FRED + Yahoo indices)
+const WORKER_TICKERS = new Set(["^VIX","^VXN","^VVIX","^MOVE","^TNX","^TYX"]);
 
 const DEC31 = {
   SPY: 681.92, DIA: 445.29, QQQ: 614.31, ONEQ: 230.79, IWM: 218.19,
@@ -72,6 +66,8 @@ const SECTIONS = [
 ];
 
 const ALL_TICKERS = [...new Set(SECTIONS.flatMap(s => s.items.map(i => i.ticker)))];
+const ETF_TICKERS = ALL_TICKERS.filter(t => !WORKER_TICKERS.has(t));
+const IDX_TICKERS = ALL_TICKERS.filter(t => WORKER_TICKERS.has(t));
 
 function getET() {
   return new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
@@ -89,41 +85,53 @@ function lastTradingDayLabel() {
   return d.toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "numeric" });
 }
 
-async function fetchOne(ticker) {
-  // Indices: fetch from stooq (no auth, no CORS issues)
-  if (STOOQ_MAP[ticker]) {
-    const url = `https://stooq.com/q/l/?s=${STOOQ_MAP[ticker]}&f=sd2t2ohlcv&h&e=json`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`${ticker}: HTTP ${res.status}`);
-    const d = await res.json();
-    const price = d?.symbols?.[0]?.close;
-    return price ? parseFloat(price) : null;
+// Fetch ETFs via Finnhub
+async function fetchETFs() {
+  const results = {};
+  const BATCH = 10;
+  for (let i = 0; i < ETF_TICKERS.length; i += BATCH) {
+    const batch = ETF_TICKERS.slice(i, i + BATCH);
+    await Promise.all(batch.map(async ticker => {
+      try {
+        const res = await fetch(`${FINNHUB}/quote?symbol=${encodeURIComponent(ticker)}&token=${FINNHUB_KEY}`);
+        if (!res.ok) return;
+        const d = await res.json();
+        const price = todayCloseAvailable() ? (d.c || d.pc) : d.pc;
+        if (price && price !== 0) results[ticker] = price;
+      } catch (e) { console.warn(`ETF ${ticker}:`, e.message); }
+    }));
+    if (i + BATCH < ETF_TICKERS.length) await new Promise(r => setTimeout(r, 600));
   }
-  // ETFs: fetch from Finnhub
-  const url = `${BASE}/quote?symbol=${encodeURIComponent(ticker)}&token=${FINNHUB_KEY}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${ticker}: HTTP ${res.status}`);
-  const d = await res.json();
-  const price = todayCloseAvailable() ? (d.c || d.pc) : d.pc;
-  return price && price !== 0 ? price : null;
+  return results;
+}
+
+// Fetch indices via Cloudflare worker (CBOE for VIX/VXN/VVIX/MOVE, FRED for rates)
+async function fetchIndices() {
+  const results = {};
+  await Promise.all(IDX_TICKERS.map(async ticker => {
+    try {
+      const res = await fetch(`${WORKER}/?ticker=${encodeURIComponent(ticker)}`);
+      if (!res.ok) return;
+      const d = await res.json();
+      // Worker returns {price: X} for CBOE/FRED, or Yahoo JSON for others
+      if (d.price != null) {
+        results[ticker] = d.price;
+      } else {
+        // Yahoo fallback format
+        const q = d?.quoteResponse?.result?.[0];
+        const price = todayCloseAvailable()
+          ? (q?.regularMarketPrice ?? q?.regularMarketPreviousClose)
+          : q?.regularMarketPreviousClose;
+        if (price != null) results[ticker] = price;
+      }
+    } catch (e) { console.warn(`Index ${ticker}:`, e.message); }
+  }));
+  return results;
 }
 
 async function fetchAllPrices() {
-  const results = {};
-  const BATCH = 10;
-  for (let i = 0; i < ALL_TICKERS.length; i += BATCH) {
-    const batch = ALL_TICKERS.slice(i, i + BATCH);
-    await Promise.all(batch.map(async ticker => {
-      try {
-        const price = await fetchOne(ticker);
-        if (price != null) results[ticker] = price;
-      } catch (e) {
-        console.warn(`Failed ${ticker}:`, e.message);
-      }
-    }));
-    if (i + BATCH < ALL_TICKERS.length) await new Promise(r => setTimeout(r, 600));
-  }
-  return results;
+  const [etfs, indices] = await Promise.all([fetchETFs(), fetchIndices()]);
+  return { ...etfs, ...indices };
 }
 
 function fmtPrice(v, type) {
