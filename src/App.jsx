@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 
-// ── Dec 31 2025 year-end reference ───────────────────────────────────────────
 const DEC31 = {
   SPY: 681.92, DIA: 445.29, QQQ: 614.31, ONEQ: 230.79, IWM: 218.19,
   VGK: 72.70,  ILF: 25.47,  EWJ: 73.43,  FXI: 33.64,  INDA: 47.08, EEM: 43.57,
@@ -60,6 +59,7 @@ const SECTIONS = [
 ];
 
 const ALL_TICKERS = [...new Set(SECTIONS.flatMap(s => s.items.map(i => i.ticker)))];
+const WORKER = "https://solitary-breeze-63fa.vadim-iosilevich.workers.dev";
 
 function getET() {
   return new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
@@ -79,8 +79,8 @@ function lastTradingDayLabel() {
 
 async function fetchYahoo() {
   const symbols = ALL_TICKERS.map(t => encodeURIComponent(t)).join("%2C");
-  const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbols}&fields=regularMarketPreviousClose,regularMarketPrice`;
-  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  const yahooUrl = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbols}&fields=regularMarketPreviousClose,regularMarketPrice`;
+  const res = await fetch(`${WORKER}/?url=${encodeURIComponent(yahooUrl)}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const json = await res.json();
   const quotes = json?.quoteResponse?.result ?? [];
@@ -164,7 +164,6 @@ export default function App() {
 
       <div style={{ width:"100%", maxWidth:690, margin:"0 auto", fontFamily:"'Source Sans 3',sans-serif", background:"#07101e" }}>
 
-        {/* Header */}
         <div style={{ background:"linear-gradient(160deg,#0b1e3d,#142a4e 60%,#0b1e3d)", border:"2px solid #1c3a70", borderBottom:"none", borderRadius:"5px 5px 0 0", padding:"18px 20px 14px", textAlign:"center" }}>
           <div style={{ fontFamily:"'Merriweather',serif", fontSize:23, fontWeight:900, letterSpacing:4, color:"#d4e4ff", textTransform:"uppercase" }}>Vixology YTD Recap</div>
           <div style={{ fontFamily:"'Merriweather',serif", fontSize:12, fontWeight:700, color:"#bf9c3a", letterSpacing:2, marginTop:3, textTransform:"uppercase" }}>
@@ -174,7 +173,7 @@ export default function App() {
             <span>
               <span style={{ display:"inline-block", width:7, height:7, borderRadius:"50%", marginRight:5, verticalAlign:"middle", background:dotColor, boxShadow:isLive?"0 0 5px #27ae60":"none" }} className={isLive?"pulse":""}></span>
               {isLive    && `${todayCloseAvailable() ? "Today's" : "Prev day's"} close · ${fetchedAt?.toLocaleTimeString()}`}
-              {isError   && "Live fetch blocked in preview · deploy to Vercel for live data"}
+              {isError   && "Fetch failed — check console for details"}
               {isLoading && "Fetching prices…"}
             </span>
             <button
@@ -196,10 +195,9 @@ export default function App() {
           </div>
         )}
 
-        {/* Notice banner when fetch is blocked */}
         {isError && (
           <div style={{ borderLeft:"2px solid #1c3a70", borderRight:"2px solid #1c3a70", background:"rgba(230,126,34,.07)", padding:"10px 14px", fontSize:11.5, color:"#a06020", borderTop:"1px solid rgba(230,126,34,.2)", textAlign:"center" }}>
-            Network requests are blocked in this Claude preview. Prices will load live once you deploy to your website.
+            Could not load prices. Please try refreshing.
           </div>
         )}
 
