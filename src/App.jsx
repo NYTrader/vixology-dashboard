@@ -2,6 +2,17 @@ import { useState, useEffect } from "react";
 
 const FINNHUB_KEY = "d6jl1apr01qkvh5qbt6gd6jl1apr01qkvh5qbt70";
 const FINNHUB = "https://finnhub.io/api/v1";
+const WORKER  = "https://solitary-breeze-63fa.vadim-iosilevich.workers.dev";
+
+const WORKER_TICKERS = ["^VIX","^VXN","^VVIX","^MOVE","^TNX","^TYX"];
+
+const ETF_TICKERS = [
+  "SPY","DIA","QQQ","ONEQ","IWM",
+  "VGK","ILF","EWJ","FXI","INDA","EEM",
+  "AGG","TLT","IEF","LQD","HYG",
+  "IBIT","ETHA",
+  "SVIX","SVXY","VIXY","VXX","UVXY","UVIX","SVOL","VYLD",
+];
 
 const DEC31 = {
   SPY: 681.92, DIA: 445.29, QQQ: 614.31, ONEQ: 230.79, IWM: 218.19,
@@ -61,15 +72,6 @@ const SECTIONS = [
   ]},
 ];
 
-// Only ETF tickers — skip indices for now
-const ETF_TICKERS = [
-  "SPY","DIA","QQQ","ONEQ","IWM",
-  "VGK","ILF","EWJ","FXI","INDA","EEM",
-  "AGG","TLT","IEF","LQD","HYG",
-  "IBIT","ETHA",
-  "SVIX","SVXY","VIXY","VXX","UVXY","UVIX","SVOL","VYLD",
-];
-
 function getET() {
   return new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
 }
@@ -86,7 +88,7 @@ function lastTradingDayLabel() {
   return d.toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "numeric" });
 }
 
-async function fetchAllPrices() {
+async function fetchETFs() {
   const results = {};
   const BATCH = 10;
   for (let i = 0; i < ETF_TICKERS.length; i += BATCH) {
@@ -98,13 +100,30 @@ async function fetchAllPrices() {
         const d = await res.json();
         const price = todayCloseAvailable() ? (d.c || d.pc) : d.pc;
         if (price && price !== 0) results[ticker] = price;
-      } catch (e) {
-        console.warn(`${ticker}:`, e.message);
-      }
+      } catch (e) { console.warn(`ETF ${ticker}:`, e.message); }
     }));
     if (i + BATCH < ETF_TICKERS.length) await new Promise(r => setTimeout(r, 600));
   }
   return results;
+}
+
+async function fetchIndices() {
+  const results = {};
+  await Promise.all(WORKER_TICKERS.map(async ticker => {
+    try {
+      const res = await fetch(`${WORKER}/?ticker=${encodeURIComponent(ticker)}`);
+      if (!res.ok) return;
+      const text = await res.text();
+      const d = JSON.parse(text);
+      if (d?.price != null) results[ticker] = d.price;
+    } catch (e) { console.warn(`Index ${ticker}:`, e.message); }
+  }));
+  return results;
+}
+
+async function fetchAllPrices() {
+  const [etfs, indices] = await Promise.all([fetchETFs(), fetchIndices()]);
+  return { ...etfs, ...indices };
 }
 
 function fmtPrice(v, type) {
