@@ -4,7 +4,6 @@ const WORKER = "https://solitary-breeze-63fa.vadim-iosilevich.workers.dev";
 const FINNHUB_KEY = "d6jl1apr01qkvh5qbt6gd6jl1apr01qkvh5qbt70";
 const FINNHUB = "https://finnhub.io/api/v1";
 
-// Tickers to fetch via Cloudflare worker (CBOE + FRED + Yahoo indices)
 const WORKER_TICKERS = new Set(["^VIX","^VXN","^VVIX","^MOVE","^TNX","^TYX"]);
 
 const DEC31 = {
@@ -85,7 +84,6 @@ function lastTradingDayLabel() {
   return d.toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "numeric" });
 }
 
-// Fetch ETFs via Finnhub
 async function fetchETFs() {
   const results = {};
   const BATCH = 10;
@@ -105,24 +103,18 @@ async function fetchETFs() {
   return results;
 }
 
-// Fetch indices via Cloudflare worker (CBOE for VIX/VXN/VVIX/MOVE, FRED for rates)
 async function fetchIndices() {
   const results = {};
   await Promise.all(IDX_TICKERS.map(async ticker => {
     try {
       const res = await fetch(`${WORKER}/?ticker=${encodeURIComponent(ticker)}`);
-      if (!res.ok) return;
-      const d = await res.json();
-      // Worker returns {price: X} for CBOE/FRED, or Yahoo JSON for others
-      if (d.price != null) {
+      if (!res.ok) { console.warn(`Worker non-OK for ${ticker}: ${res.status}`); return; }
+      // Safely parse — worker may return non-JSON in edge cases
+      const text = await res.text();
+      let d;
+      try { d = JSON.parse(text); } catch(e) { console.warn(`Bad JSON for ${ticker}:`, text.slice(0,100)); return; }
+      if (d?.price != null) {
         results[ticker] = d.price;
-      } else {
-        // Yahoo fallback format
-        const q = d?.quoteResponse?.result?.[0];
-        const price = todayCloseAvailable()
-          ? (q?.regularMarketPrice ?? q?.regularMarketPreviousClose)
-          : q?.regularMarketPreviousClose;
-        if (price != null) results[ticker] = price;
       }
     } catch (e) { console.warn(`Index ${ticker}:`, e.message); }
   }));
