@@ -3,14 +3,14 @@ import { useState, useEffect } from "react";
 const FINNHUB_KEY = "d6jl1apr01qkvh5qbt6gd6jl1apr01qkvh5qbt70";
 const BASE = "https://finnhub.io/api/v1";
 
-// Finnhub uses different symbols for indices
-const SYMBOL_MAP = {
-  "^TNX": "FRED:DGS10",
-  "^TYX": "FRED:DGS30",
-  "^VIX": "CBOE:VIX",
-  "^VXN": "CBOE:VXN",
-  "^VVIX": "CBOE:VVIX",
-  "^MOVE": "CBOE:MOVE",
+// These indices are not available on Finnhub free tier — fetch from stooq instead
+const STOOQ_MAP = {
+  "^VIX":  "%5EVIX",
+  "^VXN":  "%5EVXN",
+  "^VVIX": "%5EVVIX",
+  "^MOVE": "%5EMOVE",
+  "^TNX":  "%5ETNX",
+  "^TYX":  "%5ETYX",
 };
 
 const DEC31 = {
@@ -89,20 +89,26 @@ function lastTradingDayLabel() {
   return d.toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "numeric" });
 }
 
-// Fetch a single quote from Finnhub — returns previousClose (or current if after 5pm ET)
 async function fetchOne(ticker) {
-  const sym = SYMBOL_MAP[ticker] ?? ticker;
-  const url = `${BASE}/quote?symbol=${encodeURIComponent(sym)}&token=${FINNHUB_KEY}`;
+  // Indices: fetch from stooq (no auth, no CORS issues)
+  if (STOOQ_MAP[ticker]) {
+    const url = `https://stooq.com/q/l/?s=${STOOQ_MAP[ticker]}&f=sd2t2ohlcv&h&e=json`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`${ticker}: HTTP ${res.status}`);
+    const d = await res.json();
+    const price = d?.symbols?.[0]?.close;
+    return price ? parseFloat(price) : null;
+  }
+  // ETFs: fetch from Finnhub
+  const url = `${BASE}/quote?symbol=${encodeURIComponent(ticker)}&token=${FINNHUB_KEY}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${ticker}: HTTP ${res.status}`);
   const d = await res.json();
-  // Finnhub quote: c=current, pc=previous close
   const price = todayCloseAvailable() ? (d.c || d.pc) : d.pc;
   return price && price !== 0 ? price : null;
 }
 
 async function fetchAllPrices() {
-  // Fetch in parallel with a small concurrency limit to avoid rate limiting
   const results = {};
   const BATCH = 10;
   for (let i = 0; i < ALL_TICKERS.length; i += BATCH) {
@@ -115,7 +121,6 @@ async function fetchAllPrices() {
         console.warn(`Failed ${ticker}:`, e.message);
       }
     }));
-    // Small delay between batches to respect rate limits (60 calls/min free tier)
     if (i + BATCH < ALL_TICKERS.length) await new Promise(r => setTimeout(r, 600));
   }
   return results;
