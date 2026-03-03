@@ -1,5 +1,18 @@
 import { useState, useEffect } from "react";
 
+const FINNHUB_KEY = "d6jl1apr01qkvh5qbt6gd6jl1apr01qkvh5qbt70";
+const BASE = "https://finnhub.io/api/v1";
+
+// Finnhub uses different symbols for indices
+const SYMBOL_MAP = {
+  "^TNX": "FRED:DGS10",
+  "^TYX": "FRED:DGS30",
+  "^VIX": "CBOE:VIX",
+  "^VXN": "CBOE:VXN",
+  "^VVIX": "CBOE:VVIX",
+  "^MOVE": "CBOE:MOVE",
+};
+
 const DEC31 = {
   SPY: 681.92, DIA: 445.29, QQQ: 614.31, ONEQ: 230.79, IWM: 218.19,
   VGK: 72.70,  ILF: 25.47,  EWJ: 73.43,  FXI: 33.64,  INDA: 47.08, EEM: 43.57,
@@ -59,7 +72,6 @@ const SECTIONS = [
 ];
 
 const ALL_TICKERS = [...new Set(SECTIONS.flatMap(s => s.items.map(i => i.ticker)))];
-const WORKER = "https://solitary-breeze-63fa.vadim-iosilevich.workers.dev";
 
 function getET() {
   return new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
@@ -77,22 +89,36 @@ function lastTradingDayLabel() {
   return d.toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "numeric" });
 }
 
-async function fetchYahoo() {
-  const symbols = ALL_TICKERS.map(t => encodeURIComponent(t)).join("%2C");
-  const yahooUrl = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbols}&fields=regularMarketPreviousClose,regularMarketPrice`;
-  const res = await fetch(`${WORKER}/?url=${encodeURIComponent(yahooUrl)}`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const json = await res.json();
-  const quotes = json?.quoteResponse?.result ?? [];
-  if (!quotes.length) throw new Error("No quotes returned");
-  const out = {};
-  for (const q of quotes) {
-    const price = todayCloseAvailable()
-      ? (q.regularMarketPrice ?? q.regularMarketPreviousClose)
-      : q.regularMarketPreviousClose;
-    if (price != null) out[q.symbol] = price;
+// Fetch a single quote from Finnhub — returns previousClose (or current if after 5pm ET)
+async function fetchOne(ticker) {
+  const sym = SYMBOL_MAP[ticker] ?? ticker;
+  const url = `${BASE}/quote?symbol=${encodeURIComponent(sym)}&token=${FINNHUB_KEY}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${ticker}: HTTP ${res.status}`);
+  const d = await res.json();
+  // Finnhub quote: c=current, pc=previous close
+  const price = todayCloseAvailable() ? (d.c || d.pc) : d.pc;
+  return price && price !== 0 ? price : null;
+}
+
+async function fetchAllPrices() {
+  // Fetch in parallel with a small concurrency limit to avoid rate limiting
+  const results = {};
+  const BATCH = 10;
+  for (let i = 0; i < ALL_TICKERS.length; i += BATCH) {
+    const batch = ALL_TICKERS.slice(i, i + BATCH);
+    await Promise.all(batch.map(async ticker => {
+      try {
+        const price = await fetchOne(ticker);
+        if (price != null) results[ticker] = price;
+      } catch (e) {
+        console.warn(`Failed ${ticker}:`, e.message);
+      }
+    }));
+    // Small delay between batches to respect rate limits (60 calls/min free tier)
+    if (i + BATCH < ALL_TICKERS.length) await new Promise(r => setTimeout(r, 600));
   }
-  return out;
+  return results;
 }
 
 function fmtPrice(v, type) {
@@ -127,7 +153,7 @@ export default function App() {
   async function doFetch() {
     setStatus("loading");
     try {
-      const data = await fetchYahoo();
+      const data = await fetchAllPrices();
       if (Object.keys(data).length < 5) throw new Error("Too few results");
       setPrices(data);
       setCloseDate(lastTradingDayLabel());
@@ -173,8 +199,8 @@ export default function App() {
             <span>
               <span style={{ display:"inline-block", width:7, height:7, borderRadius:"50%", marginRight:5, verticalAlign:"middle", background:dotColor, boxShadow:isLive?"0 0 5px #27ae60":"none" }} className={isLive?"pulse":""}></span>
               {isLive    && `${todayCloseAvailable() ? "Today's" : "Prev day's"} close · ${fetchedAt?.toLocaleTimeString()}`}
-              {isError   && "Fetch failed — check console for details"}
-              {isLoading && "Fetching prices…"}
+              {isError   && "Fetch failed — try refreshing"}
+              {isLoading && "Fetching prices… (may take ~15 sec)"}
             </span>
             <button
               onClick={doFetch}
